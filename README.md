@@ -27,8 +27,8 @@ Perfect for learning, prototyping, or as a foundation for your next project!
 
 ```bash
 # Clone and run in 3 commands
-git clone https://github.com/yourusername/auth-system.git
-cd auth-system/backend && go run main.go
+git clone https://github.com/mdhsaikats/Authentication-using-GoLang-JWT-PH-CHI.git
+cd Authentication-using-GoLang-JWT-PH-CHI/backend && go run main.go
 # Open frontend/index.html in your browser - that's it! 🎉
 ```
 
@@ -60,21 +60,17 @@ cd auth-system/backend && go run main.go
 ## 🛠️ Tech Stack
 
 ### Backend
-```go
-🔹 Go 1.25.3           // Performance & simplicity
-🔹 Chi Router          // Lightweight, idiomatic routing
-🔹 JWT (golang-jwt)    // Industry-standard tokens
-🔹 bcrypt              // Adaptive password hashing
-🔹 MySQL Driver        // Rock-solid database connectivity
-```
+- 🔹 **Go 1.25.3** - Performance & simplicity
+- 🔹 **Chi Router** - Lightweight, idiomatic routing
+- 🔹 **JWT (golang-jwt)** - Industry-standard tokens
+- 🔹 **bcrypt** - Adaptive password hashing
+- 🔹 **MySQL Driver** - Rock-solid database connectivity
 
 ### Frontend
-```javascript
-🔹 Vanilla JavaScript  // No framework overhead
-🔹 Tailwind CSS        // Utility-first styling
-🔹 Fetch API           // Modern HTTP requests
-🔹 LocalStorage        // Client-side token persistence
-```
+- 🔹 **Vanilla JavaScript** - No framework overhead
+- 🔹 **Tailwind CSS** - Utility-first styling
+- 🔹 **Fetch API** - Modern HTTP requests
+- 🔹 **LocalStorage** - Client-side token persistence
 
 ## 📁 Project Structure
 
@@ -105,8 +101,8 @@ auth/
 
 **1. Clone the repository**
 ```bash
-git clone https://github.com/yourusername/auth-system.git
-cd auth-system
+git clone https://github.com/mdhsaikats/Authentication-using-GoLang-JWT-PH-CHI.git
+cd Authentication-using-GoLang-JWT-PH-CHI
 ```
 
 **2. Set up the database**
@@ -120,7 +116,7 @@ source database/auth.sql
 
 **3. Configure the backend**
 
-Edit `backend/main.go` line with your MySQL credentials:
+Edit `backend/main.go` with your MySQL credentials:
 ```go
 db, err = sql.Open("mysql", "root:your_password@tcp(localhost:3306)/auth")
 ```
@@ -139,12 +135,12 @@ Server is running on http://localhost:8080
 
 **5. Launch the frontend**
 
-Option A - Using VS Code Live Server:
+**Option A** - Using VS Code Live Server:
 - Install Live Server extension
 - Right-click `frontend/index.html`
 - Select "Open with Live Server"
 
-Option B - Using Python:
+**Option B** - Using Python:
 ```bash
 cd frontend
 python -m http.server 5500
@@ -158,7 +154,7 @@ Navigate to `http://localhost:5500` and create your first account!
 
 ### Authentication Endpoints
 
-#### **POST** `/auth` - Login
+#### POST `/auth` - Login
 ```json
 Request:
 {
@@ -173,7 +169,7 @@ Response (200):
 }
 ```
 
-#### **POST** `/auth/register` - Register New User
+#### POST `/auth/register` - Register New User
 ```json
 Request:
 {
@@ -188,8 +184,8 @@ Response (200):
 }
 ```
 
-#### **GET** `/dashboard` - Protected Route
-```http
+#### GET `/dashboard` - Protected Route
+```
 Headers:
 Authorization: Bearer <your_jwt_token>
 
@@ -295,8 +291,6 @@ Distributed under the MIT License. See `LICENSE` for more information.
 **Saikat**
 
 - GitHub: [@mdhsaikats](https://github.com/mdhsaikats)
-- Portfolio: [Your Website]
-- LinkedIn: [Your LinkedIn]
 
 ## 🌟 Show Your Support
 
@@ -318,5 +312,3 @@ Give a ⭐️ if this project helped you learn something new!
 <p align="center">
   <sub>Built to learn, shared to help others learn too!</sub>
 </p>
-#   A u t h e n t i c a t i o n - u s i n g - G o L a n g - J W T - P H - C H I  
- 
