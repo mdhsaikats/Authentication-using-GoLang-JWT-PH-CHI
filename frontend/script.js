@@ -2,6 +2,36 @@ const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
 const baseURL = 'http://localhost:8080';
 
+// Toggle password visibility
+const togglePassword = document.getElementById('togglePassword');
+if (togglePassword) {
+    togglePassword.addEventListener('click', () => {
+        const passwordInput = document.getElementById('password');
+        if (passwordInput.type === 'password') {
+            passwordInput.type = 'text';
+            togglePassword.src = '../asset/hidden.png';
+        } else {
+            passwordInput.type = 'password';
+            togglePassword.src = '../asset/eye.png';
+        }
+    });
+}
+
+// Toggle confirm password visibility
+const toggleConfirmPassword = document.getElementById('toggleConfirmPassword');
+if (toggleConfirmPassword) {
+    toggleConfirmPassword.addEventListener('click', () => {
+        const confirmPasswordInput = document.getElementById('confirm_password');
+        if (confirmPasswordInput.type === 'password') {
+            confirmPasswordInput.type = 'text';
+            toggleConfirmPassword.src = '../asset/hidden.png';
+        } else {
+            confirmPasswordInput.type = 'password';
+            toggleConfirmPassword.src = '../asset/eye.png';
+        }
+    });
+}
+
 function showNotification(message, type = 'error') {
     const notification = document.createElement('div');
     notification.className = `fixed top-4 right-4 px-6 py-4 rounded-lg shadow-lg text-white z-50 transition-all duration-300 ${
@@ -55,6 +85,8 @@ if (loginForm) {
             } else {
                 result = await response.text();
                 if (response.ok) {
+                    // Assume the text response is the token itself
+                    localStorage.setItem('authToken', result);
                     showNotification('Login successful! Redirecting...', 'success');
                     setTimeout(() => {
                         window.location.href = 'home.html';
@@ -73,6 +105,20 @@ if (loginForm) {
 if (registerForm) {
     registerForm.addEventListener('submit', async (e) => {
         e.preventDefault();
+        
+        // Validate password strength
+        if (!validatePassword()) {
+            return;
+        }
+        
+        // Check if passwords match
+        const password = document.getElementById('password').value;
+        const confirmPassword = document.getElementById('confirm_password').value;
+        if (password !== confirmPassword) {
+            showNotification('Passwords do not match', 'error');
+            return;
+        }
+        
         const formData = new FormData(registerForm);
         const data = {
             name: formData.get('name'),
@@ -147,4 +193,20 @@ window.onload = async () => {
     } catch (error) {
         console.error('Error checking login status:', error);
     }
+}
+
+function isStrongPassword(password) {
+    const strongRegex = /^(?=.*[a-zA-Z])(?=.*\d).{8,}$/;
+    return strongRegex.test(password);
+}
+
+function validatePassword() {
+    const password = document.getElementById('password').value;
+    
+    if (!isStrongPassword(password)) {
+        showNotification('Password must be at least 8 characters with a letter and a number', 'error');
+        return false;
+    }
+    
+    return true;
 }
