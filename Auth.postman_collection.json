@@ -1,0 +1,65 @@
+{
+  "info": {
+    "_postman_id": "b1122ac0-faa9-4faf-bfb5-10aa312c4f08",
+    "name": "Auth",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "46045911",
+    "_collection_link": "https://go.postman.co/collection/46045911-b1122ac0-faa9-4faf-bfb5-10aa312c4f08?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Login",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"username\": \"mdhsaikats\",\r\n    \"password_hash\": \"$@!K@T29||2oo3\"\r\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/auth/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "auth",
+            ""
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Registration",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"name\": \"Saikat\",\r\n  \"username\": \"saikat\",\r\n  \"password_hash\": \"$@!k@t29||2oo3\"\r\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/auth/register",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "auth",
+            "register"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
