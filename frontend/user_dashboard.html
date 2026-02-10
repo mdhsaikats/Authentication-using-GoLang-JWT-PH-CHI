@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/png" href="../asset/authentication.png">
     <title>Home</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <style>
         * {
             margin: 0;
@@ -43,26 +45,18 @@
 <body>
     <button id="logoutBtn">Logout</button>
     
+    <script src="script.js"></script>
     <script>
-        const logoutBtn = document.getElementById('logoutBtn');
-        const baseURL = window.location.origin;
+        // const logoutBtn = document.getElementById('logoutBtn'); // Handled in script.js now
+        // const baseURL = window.location.origin; // In script.js
 
-        function getCookie(name) {
-            const value = `; ${document.cookie}`;
-            const parts = value.split(`; ${name}=`);
-            if (parts.length === 2) return parts.pop().split(';').shift();
-            return null;
-        }
-
-        function csrfHeaders() {
-            const token = getCookie('csrf_token');
-            return token ? { 'X-CSRF-Token': token } : {};
-        }
+        // function getCookie(name) { ... } // In script.js
+        // function csrfHeaders() { ... } // In script.js
 
         async function verifyLogin() {
             try {
                 // Attempt to access the protected dashboard route
-                const response = await fetch(`${baseURL}/dashboard`, {
+                const response = await fetch(`${window.location.origin}/dashboard`, {
                     method: 'GET',
                     headers: {
                         ...csrfHeaders()
@@ -82,24 +76,9 @@
         // Check authentication immediately on load
         verifyLogin();
 
-        logoutBtn?.addEventListener('click', async () => {
-            try {
-                await fetch(`${baseURL}/auth/logout`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...csrfHeaders()
-                    },
-                    body: JSON.stringify({}), // Empty body now that token is in cookie
-                    credentials: 'include'
-                });
-            } catch (error) {
-                console.error("Logout error:", error);
-            } finally {
-                // Always redirect to login page after attempted logout
-                window.location.href = 'index.html';
-            }
-        });
+        /* 
+           Logout logic moved to script.js to share Firebase config 
+        */
     </script>
 </body>
 </html>

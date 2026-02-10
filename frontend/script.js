@@ -2,6 +2,40 @@ const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
 const baseURL = window.location.origin; // Use same origin as the page
 
+// --- Firebase Configuration ---
+// TODO: Replace with your actual config from Firebase Console
+const firebaseConfig = {
+  apiKey: "AIzaSyCdNpLEgj2qq_kftN-ZV_g4tW8ryP5WlB0",
+  authDomain: "authentication-ccfb6.firebaseapp.com",
+  projectId: "authentication-ccfb6",
+  storageBucket: "authentication-ccfb6.firebasestorage.app",
+  messagingSenderId: "268785185138",
+  appId: "1:268785185138:web:b764dec57d80bcd7f0adeb",
+  measurementId: "G-2ZF1WLYFJN"
+};
+
+// Initialize Firebase
+if (typeof firebase !== 'undefined') {
+  firebase.initializeApp(firebaseConfig);
+  
+  // Observer for Auth State Changes
+  firebase.auth().onAuthStateChanged((user) => {
+    if (user) {
+      console.log('User is signed in:', user);
+      // You could update UI here, e.g., show user profile pic
+    } else {
+      console.log('User is signed out');
+      // If on a protected page, you might redirect:
+      // if (window.location.pathname.includes('dashboard.html')) window.location.href = 'index.html';
+    }
+  });
+
+} else {
+  // Graceful fallback if SDK fails to load or offline
+  console.warn("Firebase SDK not loaded");
+}
+// -----------------------------
+
 function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -215,4 +249,89 @@ function validatePassword() {
     }
     
     return true;
+}
+
+// --- Google Sign-In Logic ---
+const googleLoginBtn = document.getElementById('googleLoginBtn');
+
+if (googleLoginBtn) {
+    googleLoginBtn.addEventListener('click', async () => {
+        if (typeof firebase === 'undefined') {
+             showNotification("Firebase not initialized. Check console.", 'error');
+             return;
+        }
+
+        const provider = new firebase.auth.GoogleAuthProvider();
+        
+        try {
+            const result = await firebase.auth().signInWithPopup(provider);
+            const user = result.user;
+            
+            console.log("Google User:", user);
+            const token = await user.getIdToken();
+            console.log("ID Token:", token);
+
+            // Send 'token' to your Go backend for verification!
+            const verifyResponse = await fetch(`${baseURL}/auth/google`, {
+                 method: 'POST',
+                 headers: {
+                     'Content-Type': 'application/json',
+                     ...csrfHeaders()
+                 },
+                 body: JSON.stringify({ token: token }),
+                 credentials: 'include'
+            });
+
+            if (!verifyResponse.ok) {
+                const errMsg = await verifyResponse.text();
+                throw new Error("Backend verification failed: " + errMsg);
+            }
+
+            showNotification(`Login successful as ${user.displayName}!`, 'success');
+            
+            // Redirect after short delay
+            setTimeout(() => {
+                window.location.href = 'user_dashboard.html'; 
+            }, 1000);
+
+        } catch (error) {
+            console.error("Google Sign-in Error:", error);
+            showNotification(error.message, 'error');
+        }
+    });
+}
+
+// --- Logout Logic ---
+const logoutBtn = document.getElementById('logoutBtn');
+if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+        try {
+            // 1. Sign out from Firebase
+            if (typeof firebase !== 'undefined') {
+                await firebase.auth().signOut();
+                console.log("Signed out from Firebase");
+            }
+
+            // 2. Sign out from Backend (if applicable)
+             await fetch(`${baseURL}/auth/logout`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...csrfHeaders()
+                },
+                body: JSON.stringify({}),
+                credentials: 'include'
+            });
+
+            showNotification('Logged out successfully', 'success');
+            setTimeout(() => {
+                window.location.href = 'index.html';
+            }, 500);
+
+        } catch (error) {
+            console.error("Logout error:", error);
+            // Force redirect anyway
+            window.location.href = 'index.html';
+        }
+    });
 }

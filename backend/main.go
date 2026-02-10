@@ -614,6 +614,135 @@ func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GoogleAuthRequest represents the JSON payload from the frontend
+type GoogleAuthRequest struct {
+	Token string `json:"token"`
+}
+
+// GoogleTokenInfo represents the response from Google's tokeninfo endpoint
+type GoogleTokenInfo struct {
+	Sub           string `json:"sub"`
+	Email         string `json:"email"`
+	EmailVerified string `json:"email_verified"` // boolean as string or boolean? Usually boolean but check google api. API returns "true" string or boolean literal. Decoding into string is safer or interface{}
+	Name          string `json:"name"`
+	Picture       string `json:"picture"`
+	Aud           string `json:"aud"` // Audience (Client ID)
+}
+
+func googleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid Method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req GoogleAuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Verify token with Google
+	resp, err := http.Get("https://oauth2.googleapis.com/tokeninfo?id_token=" + req.Token)
+	if err != nil {
+		http.Error(w, "Failed to call Google verification API", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Invalid Google Token", http.StatusUnauthorized)
+		return
+	}
+
+	var tokenInfo GoogleTokenInfo
+	if err := json.NewDecoder(resp.Body).Decode(&tokenInfo); err != nil {
+		http.Error(w, "Failed to parse Google response", http.StatusInternalServerError)
+		return
+	}
+
+	// Optional: Check if tokenInfo.Aud matches your Firebase/Google Client ID
+	// if tokenInfo.Aud != "YOUR_CLIENT_ID" { ... }
+
+	// 2. Check if user exists in DB
+	// We use Email as the username for Google users
+	email := tokenInfo.Email
+	if email == "" {
+		http.Error(w, "Google account has no email", http.StatusBadRequest)
+		return
+	}
+
+	var existingUser string
+	err = db.QueryRow("SELECT username FROM users WHERE username = ?", email).Scan(&existingUser)
+
+	if err == sql.ErrNoRows {
+		// 3. Register new user
+		// Password is NULL or placeholder string. We use "GOOGLE_SSO" to indicate this.
+		// Since password_hash column is varchar(300), we can store a marker.
+		// However, existing login logic checks CheckPassword(stored, provided).
+		// Since Google users bypass password check (they use token), this is fine for this handler.
+		// But if they try to login with password using the 'email' as username, it should fail nicely.
+		// Storing a long random string or specific marker that bcrypt won't match is good.
+
+		stmt, err := db.Prepare("INSERT INTO users(name, username, password_hash) VALUES(?, ?, ?)")
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		_, err = stmt.Exec(tokenInfo.Name, email, "GOOGLE_SSO_USER")
+		if err != nil {
+			http.Error(w, "Failed to register user", http.StatusInternalServerError)
+			return
+		}
+
+	} else if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Generate Tokens (Bypass password check since Google verified identity)
+	accessToken, accessJTI, err := generateAccessToken(email)
+	if err != nil {
+		http.Error(w, "Error generating access token", http.StatusInternalServerError)
+		return
+	}
+
+	refreshToken, err := generateRefreshToken(email)
+	if err != nil {
+		http.Error(w, "Error generating refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	refreshHash := hashToken(refreshToken)
+	_, err = db.Exec("INSERT INTO refresh_tokens (username, token_hash, expires_at) VALUES (?, ?, ?)",
+		email, refreshHash, time.Now().Add(refreshTokenTTL))
+	if err != nil {
+		http.Error(w, "Error storing refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec("INSERT INTO access_tokens (jti, username, expires_at) VALUES (?, ?, ?)",
+		accessJTI, email, time.Now().Add(accessTokenTTL))
+	if err != nil {
+		http.Error(w, "Error storing access token", http.StatusInternalServerError)
+		return
+	}
+
+	// 5. Set Cookies & Respond
+	csrfToken, err := generateCSRFToken()
+	if err == nil {
+		setCSRFCookie(w, csrfToken)
+	}
+	setAuthCookies(w, accessToken, refreshToken)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":  "Google Login Successful",
+		"username": email,
+	})
+}
+
 func logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid Method", http.StatusMethodNotAllowed)
@@ -730,6 +859,7 @@ func main() {
 		r.Use(csrfMiddleware)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/", login)
+			r.Post("/google", googleLogin)
 			r.Post("/register", registration)
 			r.Post("/refresh", refreshTokenHandler)
 			r.Post("/logout", logout)

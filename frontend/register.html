@@ -93,6 +93,21 @@
                 >
                     Register
                 </button>
+
+                <div class="flex items-center justify-between my-4">
+                    <hr class="w-full border-gray-300">
+                    <span class="px-2 text-gray-500 text-sm">OR</span>
+                    <hr class="w-full border-gray-300">
+                </div>
+
+                <button 
+                    type="button"
+                    id="googleLoginBtn"
+                    class="w-full bg-red-600 text-white border border-red-600 py-2 rounded-lg 
+                           hover:bg-white hover:text-red-600 transition"
+                >
+                    Sign up with Google
+                </button>
                 <p class="text-center text-gray-600 text-sm mt-4">
                     Already have an account? 
                     <a href="index.html" class="text-black hover:underline">
@@ -115,6 +130,8 @@
 
     </div>
 
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="script.js"></script>
 
 </body>
