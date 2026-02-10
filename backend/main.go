@@ -1,13 +1,16 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -23,15 +26,107 @@ var db *sql.DB
 var jwtKey []byte
 var refreshKey []byte
 
-func getKeyFromEnv() string {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
+var loginAttempts = struct {
+	sync.Mutex
+	counts       map[string]int
+	blockedUntil map[string]time.Time
+}{
+	counts:       map[string]int{},
+	blockedUntil: map[string]time.Time{},
+}
 
-	jwtSecret := os.Getenv("JWT_SECRET")
-	log.Println(jwtSecret)
-	return jwtSecret
+const (
+	accessTokenTTL  = 15 * time.Minute
+	refreshTokenTTL = 7 * 24 * time.Hour
+)
+
+func generateJTI() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func isStrongPassword(pw string) bool {
+	if len(pw) < 8 {
+		return false
+	}
+	hasLetter := false
+	hasDigit := false
+	for _, c := range pw {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			hasLetter = true
+		}
+		if c >= '0' && c <= '9' {
+			hasDigit = true
+		}
+	}
+	return hasLetter && hasDigit
+}
+
+func isBlocked(username string) bool {
+	loginAttempts.Lock()
+	defer loginAttempts.Unlock()
+	until, ok := loginAttempts.blockedUntil[username]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(loginAttempts.blockedUntil, username)
+	loginAttempts.counts[username] = 0
+	return false
+}
+
+func recordFailure(username string) {
+	loginAttempts.Lock()
+	defer loginAttempts.Unlock()
+	loginAttempts.counts[username]++
+	if loginAttempts.counts[username] >= 5 {
+		loginAttempts.blockedUntil[username] = time.Now().Add(10 * time.Minute)
+		loginAttempts.counts[username] = 0
+	}
+}
+
+func resetAttempts(username string) {
+	loginAttempts.Lock()
+	defer loginAttempts.Unlock()
+	loginAttempts.counts[username] = 0
+	delete(loginAttempts.blockedUntil, username)
+}
+
+func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "access_token",
+		Value:    accessToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(accessTokenTTL.Seconds()),
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/auth",
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(refreshTokenTTL.Seconds()),
+	})
+}
+
+func clearAuthCookies(w http.ResponseWriter) {
+	expired := time.Unix(0, 0)
+	http.SetCookie(w, &http.Cookie{Name: "access_token", Value: "", Path: "/", Expires: expired, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "refresh_token", Value: "", Path: "/auth", Expires: expired, MaxAge: -1})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -58,22 +153,31 @@ func CheckPassword(hashedPassword, password string) bool {
 	return err == nil
 }
 
-func generateAccessToken(username string) (string, error) {
+func generateAccessToken(username string) (string, string, error) {
+	jti, err := generateJTI()
+	if err != nil {
+		return "", "", err
+	}
 	claims := &jwt.RegisteredClaims{
 		Subject:   username,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+		ID:        jti,
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(accessTokenTTL)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		NotBefore: jwt.NewNumericDate(time.Now()),
 		Issuer:    "auth-service",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtKey)
+	signed, err := token.SignedString(jwtKey)
+	if err != nil {
+		return "", "", err
+	}
+	return signed, jti, nil
 }
 
 func generateRefreshToken(username string) (string, error) {
 	claims := &jwt.RegisteredClaims{
 		Subject:   username,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(refreshTokenTTL)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		Issuer:    "auth-service",
 	}
@@ -118,21 +222,37 @@ func verifyRefreshToken(tokenString string) (*jwt.RegisteredClaims, error) {
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization header required", http.StatusUnauthorized)
-			return
+		var tokenString string
+		if authHeader != "" {
+			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+			if tokenString == authHeader {
+				http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			cookie, err := r.Cookie("access_token")
+			if err != nil || cookie.Value == "" {
+				http.Error(w, "Authorization required", http.StatusUnauthorized)
+				return
+			}
+			tokenString = cookie.Value
 		}
 
-		// Expected format: "Bearer <token>"
-		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		if tokenString == authHeader {
-			http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
-			return
-		}
-
-		_, err := verifyAccessToken(tokenString)
+		claims, err := verifyAccessToken(tokenString)
 		if err != nil {
 			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		var expiresAt time.Time
+		err = db.QueryRow("SELECT expires_at FROM access_tokens WHERE jti = ?", claims.ID).Scan(&expiresAt)
+		if err != nil {
+			http.Error(w, "Invalid or revoked token", http.StatusUnauthorized)
+			return
+		}
+		if time.Now().After(expiresAt) {
+			db.Exec("DELETE FROM access_tokens WHERE jti = ?", claims.ID)
+			http.Error(w, "Token expired", http.StatusUnauthorized)
 			return
 		}
 
@@ -156,6 +276,10 @@ func login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
+	if isBlocked(creds.Username) {
+		http.Error(w, "Too many failed attempts. Try again later.", http.StatusTooManyRequests)
+		return
+	}
 	fmt.Printf("Login attempt - Username: %s, Password length: %d\n", creds.Username, len(creds.Password))
 
 	var query string
@@ -169,14 +293,18 @@ func login(w http.ResponseWriter, r *http.Request) {
 	err = db.QueryRow(query, creds.Username).Scan(&storedHashedPassword)
 	if err != nil {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		recordFailure(creds.Username)
 		return
 	}
 	if !CheckPassword(storedHashedPassword, creds.Password) {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		recordFailure(creds.Username)
 		return
 	}
 
-	accessToken, err := generateAccessToken(creds.Username)
+	resetAttempts(creds.Username)
+
+	accessToken, accessJTI, err := generateAccessToken(creds.Username)
 	if err != nil {
 		http.Error(w, "Error generating access token", http.StatusInternalServerError)
 		return
@@ -188,19 +316,30 @@ func login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store refresh token in database
-	_, err = db.Exec("INSERT INTO refresh_tokens (username, token, expires_at) VALUES (?, ?, ?)",
-		creds.Username, refreshToken, time.Now().Add(7*24*time.Hour))
+	refreshHash := hashToken(refreshToken)
+
+	_, _ = db.Exec("DELETE FROM refresh_tokens WHERE username = ?", creds.Username)
+	_, err = db.Exec("INSERT INTO refresh_tokens (username, token_hash, expires_at) VALUES (?, ?, ?)",
+		creds.Username, refreshHash, time.Now().Add(refreshTokenTTL))
 	if err != nil {
 		fmt.Printf("Error storing refresh token: %v\n", err)
 	}
+
+	_, _ = db.Exec("DELETE FROM access_tokens WHERE username = ?", creds.Username)
+	_, err = db.Exec("INSERT INTO access_tokens (jti, username, expires_at) VALUES (?, ?, ?)",
+		accessJTI, creds.Username, time.Now().Add(accessTokenTTL))
+	if err != nil {
+		fmt.Printf("Error storing access token JTI: %v\n", err)
+	}
+
+	setAuthCookies(w, accessToken, refreshToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"token_type":    "Bearer",
-		"expires_in":    "900", // 15 minutes in seconds
+		"expires_in":    fmt.Sprint(int(accessTokenTTL.Seconds())),
 	})
 }
 
@@ -220,6 +359,10 @@ func registration(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Printf("Registration decode error: %v\n", err)
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+	if !isStrongPassword(creds.Password) {
+		http.Error(w, "Password must be at least 8 characters and include a letter and a number", http.StatusBadRequest)
 		return
 	}
 	fmt.Printf("Registration attempt - Name: %s, Username: %s, Password length: %d\n", creds.Name, creds.Username, len(creds.Password))
@@ -266,11 +409,13 @@ func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshHash := hashToken(req.RefreshToken)
+
 	// Check if refresh token exists in database
 	var storedToken string
 	var expiresAt time.Time
-	err = db.QueryRow("SELECT token, expires_at FROM refresh_tokens WHERE username = ? AND token = ?",
-		claims.Subject, req.RefreshToken).Scan(&storedToken, &expiresAt)
+	err = db.QueryRow("SELECT token_hash, expires_at FROM refresh_tokens WHERE username = ? AND token_hash = ?",
+		claims.Subject, refreshHash).Scan(&storedToken, &expiresAt)
 	if err != nil {
 		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
 		return
@@ -279,23 +424,51 @@ func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if token has expired
 	if time.Now().After(expiresAt) {
 		// Delete expired token
-		db.Exec("DELETE FROM refresh_tokens WHERE token = ?", req.RefreshToken)
+		db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", refreshHash)
 		http.Error(w, "Refresh token expired", http.StatusUnauthorized)
 		return
 	}
 
-	// Generate new access token
-	newAccessToken, err := generateAccessToken(claims.Subject)
+	// Rotate refresh token: delete old, create new
+	_, err = db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", refreshHash)
+	if err != nil {
+		http.Error(w, "Error rotating refresh token", http.StatusInternalServerError)
+		return
+	}
+	newRefreshToken, err := generateRefreshToken(claims.Subject)
+	if err != nil {
+		http.Error(w, "Error generating refresh token", http.StatusInternalServerError)
+		return
+	}
+	newRefreshHash := hashToken(newRefreshToken)
+	_, err = db.Exec("INSERT INTO refresh_tokens (username, token_hash, expires_at) VALUES (?, ?, ?)",
+		claims.Subject, newRefreshHash, time.Now().Add(refreshTokenTTL))
+	if err != nil {
+		http.Error(w, "Error storing refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	// Revoke prior access tokens and issue new access token
+	_, _ = db.Exec("DELETE FROM access_tokens WHERE username = ?", claims.Subject)
+	newAccessToken, newJTI, err := generateAccessToken(claims.Subject)
 	if err != nil {
 		http.Error(w, "Error generating access token", http.StatusInternalServerError)
 		return
 	}
+	_, err = db.Exec("INSERT INTO access_tokens (jti, username, expires_at) VALUES (?, ?, ?)",
+		newJTI, claims.Subject, time.Now().Add(accessTokenTTL))
+	if err != nil {
+		fmt.Printf("Error storing new access token JTI: %v\n", err)
+	}
+
+	setAuthCookies(w, newAccessToken, newRefreshToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"access_token": newAccessToken,
-		"token_type":   "Bearer",
-		"expires_in":   "900",
+		"access_token":  newAccessToken,
+		"refresh_token": newRefreshToken,
+		"token_type":    "Bearer",
+		"expires_in":    fmt.Sprint(int(accessTokenTTL.Seconds())),
 	})
 }
 
@@ -312,11 +485,27 @@ func logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims, err := verifyRefreshToken(req.RefreshToken)
+	if err != nil {
+		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	refreshHash := hashToken(req.RefreshToken)
+
 	// Delete refresh token from database
-	_, err = db.Exec("DELETE FROM refresh_tokens WHERE token = ?", req.RefreshToken)
+	_, err = db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", refreshHash)
 	if err != nil {
 		fmt.Printf("Error deleting refresh token: %v\n", err)
 	}
+
+	// Revoke all access tokens for this user to avoid stolen token reuse
+	_, err = db.Exec("DELETE FROM access_tokens WHERE username = ?", claims.Subject)
+	if err != nil {
+		fmt.Printf("Error deleting access tokens: %v\n", err)
+	}
+
+	clearAuthCookies(w)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
