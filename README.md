@@ -1,314 +1,161 @@
-# 🔐 Auth - Modern JWT Authentication System
+# 🔐 Go + JS Secure Authentication System
 
-> A sleek, secure, and production-ready authentication system that combines the power of Go with the simplicity of vanilla JavaScript.
+A production-ready authentication system built with **Go (Chi)** and **Vanilla JS**. It features a unified architecture where the Go backend serves both the API and the secure frontend, implementing industry-standard security practices including JWT rotation, JTI revocation, CSRF protection, and HttpOnly cookies.
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?style=flat&logo=mysql&logoColor=white)](https://www.mysql.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+## 🚀 Key Features
 
-## 🎯 What is This?
+### Security Architecture
+- **JWT Architecture**: Short-lived Access Tokens (15m) + Long-lived Refresh Tokens (7d).
+- **Transport Security**: All tokens stored in **HttpOnly, Secure Cookies**. No `localStorage` usage.
+- **Token Revocation (JTI)**: Server-side tracking of Access Token IDs (JTI). Logout invalidates tokens immediately.
+- **Refresh Rotation**: Usage of a refresh token invalidates the old one and issues a new pair, detecting token theft.
+- **CSRF Protection**: Double-Submit Cookie pattern with `X-CSRF-Token` headers for all state-changing requests.
+- **Secure Storage**: Passwords hashed with **Bcrypt** (Cost 14). Refresh tokens hashed (SHA-256) in the database.
+- **Rate Limiting**: In-memory lockout prevents brute access (5 failures = 10m ban).
 
-Ever wondered how login systems actually work? This project is a complete, from-scratch implementation of a JWT-based authentication system. No bloated frameworks, no unnecessary complexity—just clean, readable code that demonstrates modern authentication practices.
-
-Perfect for learning, prototyping, or as a foundation for your next project!
-
-## ✨ Features That Matter
-
-- 🛡️ **Military-Grade Security** - Bcrypt hashing with cost factor 14 (that's 2^14 iterations!)
-- 🎫 **JWT Authentication** - Stateless, scalable token-based auth
-- 🚀 **Lightning Fast** - Go's concurrency makes it blazingly fast
-- 🎨 **Beautiful UI** - Clean, responsive design with Tailwind CSS
-- 🔔 **Smart Notifications** - Real-time toast messages for user actions
-- 🔄 **Auto-Redirect** - Smart routing based on authentication state
-- 📱 **Mobile Ready** - Fully responsive across all devices
-- 🌐 **CORS Configured** - Ready for production deployment
-
-## 🎬 Quick Demo
-
-```bash
-# Clone and run in 3 commands
-git clone https://github.com/mdhsaikats/Authentication-using-GoLang-JWT-PH-CHI.git
-cd Authentication-using-GoLang-JWT-PH-CHI/backend && go run main.go
-# Open frontend/index.html in your browser - that's it! 🎉
-```
-
-## 📸 Screenshots
-
-**Login Page**
-- Clean, minimalist design
-- Real-time form validation
-- Smooth animations
-
-**Dashboard**
-- Protected route (JWT required)
-- User-specific content
-- Secure session management
-
-## 🏗️ Architecture
-
-```
-┌─────────────┐          ┌─────────────┐          ┌─────────────┐
-│   Browser   │  HTTPS   │  Go Server  │   TCP    │   MySQL DB  │
-│  (Frontend) │ ◄──────► │  (Backend)  │ ◄──────► │  (Storage)  │
-└─────────────┘          └─────────────┘          └─────────────┘
-     │                          │
-     │  JWT Token               │  bcrypt hash
-     │  localStorage            │  Prepared statements
-     └──────────────────────────┘
-```
+### Unified Architecture
+- **Single Port**: Backend serves static assets (`/asset`) and frontend HTML (`/*`) on port **8080**.
+- **No CORS Issues**: Same-origin policy simplifies cookie handling and security.
+- **Auto-Migration**: Database tables (`users`, `access_tokens`, `refresh_tokens`) are created automatically on startup.
 
 ## 🛠️ Tech Stack
+- **Backend**: Go (Golang) 1.25+, `go-chi/chi`, `golang-jwt/jwt/v5`, `x/crypto/bcrypt`.
+- **Database**: MySQL 8.0+.
+- **Frontend**: Native JavaScript (ES6+), Fetch API, TailwindCSS (CDN).
 
-### Backend
-- 🔹 **Go 1.25.3** - Performance & simplicity
-- 🔹 **Chi Router** - Lightweight, idiomatic routing
-- 🔹 **JWT (golang-jwt)** - Industry-standard tokens
-- 🔹 **bcrypt** - Adaptive password hashing
-- 🔹 **MySQL Driver** - Rock-solid database connectivity
+## ⚡ Quick Start
 
-### Frontend
-- 🔹 **Vanilla JavaScript** - No framework overhead
-- 🔹 **Tailwind CSS** - Utility-first styling
-- 🔹 **Fetch API** - Modern HTTP requests
-- 🔹 **LocalStorage** - Client-side token persistence
+### 1. Prerequisites
+- Go installed.
+- MySQL installed and running.
+- Create a database named `auth`:
+  ```sql
+  CREATE DATABASE auth;
+  ```
 
-## 📁 Project Structure
+### 2. Configuration
+Create a `.env` file in the `backend/` directory:
 
-```
-auth/
-├── 📂 asset/              # Logos, icons, static files
-├── 📂 backend/
-│   ├── main.go           # 🚀 Server & API logic
-│   └── go.mod            # Go dependencies
-├── 📂 database/
-│   └── auth.sql          # 🗄️ Database schema
-└── 📂 frontend/
-    ├── index.html        # 🔑 Login page
-    ├── register.html     # 📝 Registration page
-    ├── home.html         # 🏠 Protected dashboard
-    └── script.js         # ⚡ Client-side magic
+```env
+# Database Config (Ensure ?parseTime=true is included or handled by code)
+DB_CONNECTION_STRING=root:your_password@tcp(localhost:3306)/auth
+
+# Secrets (Generate using `openssl rand -base64 32`)
+JWT_SECRET_KEY=your_very_long_secure_random_string_for_access
+JWT_REFRESH_SECRET_KEY=your_very_long_secure_random_string_for_refresh
+
+# Security Flags
+COOKIE_SECURE=false # Set to true in production (requires HTTPS)
 ```
 
-## 🚀 Getting Started
+### 3. Run the Application
+Navigate to the backend directory and run the server. It will compile, initialize the database tables, and start listening.
 
-### Prerequisites
-
-- **Go** 1.25.3+ ([Download](https://go.dev/dl/))
-- **MySQL** 8.0+ ([Download](https://dev.mysql.com/downloads/))
-- **Web Browser** (Chrome, Firefox, Safari, Edge)
-
-### Installation
-
-**1. Clone the repository**
-```bash
-git clone https://github.com/mdhsaikats/Authentication-using-GoLang-JWT-PH-CHI.git
-cd Authentication-using-GoLang-JWT-PH-CHI
-```
-
-**2. Set up the database**
-```bash
-# Login to MySQL
-mysql -u root -p
-
-# Create database and import schema
-source database/auth.sql
-```
-
-**3. Configure the backend**
-
-Edit `backend/main.go` with your MySQL credentials:
-```go
-db, err = sql.Open("mysql", "root:your_password@tcp(localhost:3306)/auth")
-```
-
-**4. Install dependencies & run**
 ```bash
 cd backend
-go mod download
+go mod tidy
 go run main.go
 ```
 
-You should see:
+The server will start on **port 8080**.
+
+### 4. Access the App
+Open your browser to:
+👉 **[http://localhost:8080/index.html](http://localhost:8080/index.html)**
+
+> **Note**: Do not use Live Server or open the HTML files directly. They must be served by the Go backend to share cookies securely.
+
+## 📡 API Endpoints
+
+All `POST` endpoints require `X-CSRF-Token` header (handled automatically by frontend).
+
+| Method | Endpoint | Description | Protected |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/auth` | Login (Returns HttpOnly Cookies) | No |
+| `POST` | `/auth/register` | Create new account | No |
+| `POST` | `/auth/refresh` | Rotate tokens using Refresh Cookie | No |
+| `POST` | `/auth/logout` | Revoke tokens & clear cookies | Yes |
+| `GET` | `/dashboard` | Protected Resource Example | **Yes** |
+
+## 🗄️ Database Schema
+
+The system automatically verifies and creates the following tables:
+- **`users`**: Stores user credentials.
+- **`refresh_tokens`**: Stores **hashes** of active refresh tokens (never plaintext).
+- **`access_tokens`**: Stores active JTIs (Token IDs) for revocation checking.
+
+## 🛡️ Security Details
+
+1.  **Why no LocalStorage?** LocalStorage is vulnerable to XSS. HttpOnly cookies cannot be read by JavaScript, protecting tokens even if the frontend is compromised.
+2.  **Why JTI Revocation?** JWTs are stateless by default. We add state checking (`access_tokens` table) to allow immediate "Kill Switch" capability for logout or banning users.
+3.  **Why Refresh Rotation?** If a refresh token is stolen, the attacker can use it. But the moment the legitimate user (or the attacker) uses it again, the system detects a reuse attempt and can invalidate the chain.
+
+## 📂 Project Structure
+
 ```
-Server is running on http://localhost:8080
-```
+├── backend/
+│   ├── main.go           # Entry point, Middleware, API Logic, File Server
+│   ├── go.mod            # Dependencies
+│   └── .env              # Configuration (Not committed)
+├── frontend/
+│   ├── index.html        # Login Page
+│   ├── register.html     # Registration Page
+│   ├── user_dashboard.html # Protected Dashboard
+│   └── script.js         # Frontend Logic (Auth, Fetch, UI)
+└── asset/
+    ├── authentication.png
+    └── ...
+```- `access_tokens(id, jti UNIQUE, username, expires_at, created_at)` — for server-side revocation
+See [database/auth.sql](database/auth.sql) for full DDL.
 
-**5. Launch the frontend**
+## API
+All responses are JSON. Cookies are set/cleared automatically.
 
-**Option A** - Using VS Code Live Server:
-- Install Live Server extension
-- Right-click `frontend/index.html`
-- Select "Open with Live Server"
-
-**Option B** - Using Python:
-```bash
-cd frontend
-python -m http.server 5500
-```
-
-**6. Start coding! 🎉**
-
-Navigate to `http://localhost:5500` and create your first account!
-
-## 🔌 API Reference
-
-### Authentication Endpoints
-
-#### POST `/auth` - Login
+### POST /auth (login)
+Body:
 ```json
-Request:
-{
-  "username": "johndoe",
-  "password_hash": "secretpass123"
-}
-
-Response (200):
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "message": "Login successful"
-}
+{ "username": "johnd", "password_hash": "YourPassword123" }
 ```
-
-#### POST `/auth/register` - Register New User
+On success: sets `access_token` (HttpOnly, ~15m) and `refresh_token` (HttpOnly, ~7d) cookies and returns tokens in the body for non-cookie clients:
 ```json
-Request:
-{
-  "name": "John Doe",
-  "username": "johndoe",
-  "password_hash": "secretpass123"
-}
-
-Response (200):
-{
-  "success": "User registered successfully"
-}
+{ "access_token": "...", "refresh_token": "...", "token_type": "Bearer", "expires_in": "900" }
 ```
 
-#### GET `/dashboard` - Protected Route
+### POST /auth/register
+Body:
+```json
+{ "name": "Jane Doe", "username": "janed", "password_hash": "YourPassword123" }
 ```
-Headers:
-Authorization: Bearer <your_jwt_token>
+Password must be >=12 chars with upper, lower, digit, and special character.
 
-Response (200):
-{
-  "message": "Welcome to dashboard"
-}
-```
+### POST /auth/refresh
+Uses refresh cookie (or send `refresh_token` in body) to rotate refresh + issue new access. Old refresh and access JTIs are revoked. Requires `X-CSRF-Token` header matching `csrf_token` cookie for browser flows.
 
-## 🔒 Security Features
+### POST /auth/logout
+Deletes stored refresh + all access JTIs for the user; clears cookies. Requires `X-CSRF-Token` header matching `csrf_token` cookie for browser flows.
 
-| Feature | Implementation | Why It Matters |
-|---------|----------------|----------------|
-| **Password Hashing** | bcrypt (cost: 14) | Prevents rainbow table attacks |
-| **JWT Tokens** | HS256 signing | Stateless authentication |
-| **CORS Protection** | Specific origin whitelist | Prevents unauthorized access |
-| **SQL Injection** | Prepared statements | Database security |
-| **Token Expiration** | Configurable TTL | Limits attack window |
-| **HTTPS Ready** | TLS support | Encrypted communication |
+### GET /dashboard
+Protected route. Supply `Authorization: Bearer <access>` or rely on the HttpOnly access cookie.
 
-## 🎓 Learning Resources
+## Security Measures
+- Bcrypt password hashing (cost 14)
+- Access token JTI store with revocation on logout/login/refresh
+- Refresh tokens hashed at rest; rotation on every refresh
+- HttpOnly cookies for tokens; avoid `localStorage`
+- Strong password policy server-side (>=12 chars, upper/lower/digit/special)
+- In-memory login rate limiting/lockout (5 bad attempts → 10 min block, keyed by username+IP)
+- CSRF protection: `X-CSRF-Token` must match `csrf_token` cookie for unsafe methods
 
-This project is perfect for understanding:
+## Frontend Notes
+- `fetch` calls use `credentials: 'include'` to send/receive cookies
+- Tokens are not stored in `localStorage`
+- `X-CSRF-Token` header is sent when a csrf_token cookie exists
+- Authorization header fallback remains for non-browser clients
 
-- ✅ How JWT authentication works end-to-end
-- ✅ Go backend development with Chi router
-- ✅ MySQL database integration
-- ✅ Frontend-backend communication
-- ✅ Security best practices
-- ✅ RESTful API design
+## Production Checklist
+- Serve over HTTPS; set cookie `Secure=true` and consider `SameSite=Strict`
+- Move rate limiting to a shared store (e.g., Redis) keyed by IP + username
+- Add monitoring/logging and automated tests
 
-## 🔧 Configuration
-
-### Environment Variables (Optional)
-```bash
-# Create .env file in backend/
-DB_USER=root
-DB_PASSWORD=yourpassword
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=auth
-JWT_SECRET=your-secret-key
-PORT=8080
-```
-
-### Database Schema
-```sql
-CREATE TABLE users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    username VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(300) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-## 🐛 Troubleshooting
-
-**Problem:** `connection refused` error
-
-**Solution:** Make sure MySQL is running: `sudo service mysql start`
-
----
-
-**Problem:** CORS errors in browser console
-
-**Solution:** Check that frontend is served on allowed origin (update `main.go` CORS settings)
-
----
-
-**Problem:** JWT token expired
-
-**Solution:** Login again to get a fresh token
-
-## 🤝 Contributing
-
-Contributions make the open-source world amazing! Any contributions you make are **greatly appreciated**.
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 💡 Future Enhancements
-
-- [ ] Email verification
-- [ ] Password reset functionality
-- [ ] OAuth integration (Google, GitHub)
-- [ ] Two-factor authentication (2FA)
-- [ ] Rate limiting for API endpoints
-- [ ] Redis for token blacklisting
-- [ ] Docker containerization
-- [ ] CI/CD pipeline
-- [ ] Unit & integration tests
-
-## 📝 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
-
-## 👨‍💻 Author
-
-**Saikat**
-
-- GitHub: [@mdhsaikats](https://github.com/mdhsaikats)
-
-## 🌟 Show Your Support
-
-Give a ⭐️ if this project helped you learn something new!
-
-## 📚 Acknowledgments
-
-- [Chi Router](https://github.com/go-chi/chi) - Lightweight Go router
-- [JWT](https://jwt.io/) - Learn about JSON Web Tokens
-- [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework
-- [Go Documentation](https://go.dev/doc/) - Official Go docs
-
----
-
-<p align="center">
-  Made with ❤️ and ☕
-</p>
-
-<p align="center">
-  <sub>Built to learn, shared to help others learn too!</sub>
-</p>
+## License
+MIT

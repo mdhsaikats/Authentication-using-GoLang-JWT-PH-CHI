@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="../asset/authentication.png">
+    <title>Home</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+        
+        button {
+            padding: 12px 32px;
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            background-color: #fff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        button:hover {
+            background-color: #333;
+            color: #fff;
+        }
+    </style>
+</head>
+
+<body>
+    <button id="logoutBtn">Logout</button>
+    
+    <script>
+        const logoutBtn = document.getElementById('logoutBtn');
+        const baseURL = window.location.origin;
+
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+            return null;
+        }
+
+        function csrfHeaders() {
+            const token = getCookie('csrf_token');
+            return token ? { 'X-CSRF-Token': token } : {};
+        }
+
+        async function verifyLogin() {
+            try {
+                // Attempt to access the protected dashboard route
+                const response = await fetch(`${baseURL}/dashboard`, {
+                    method: 'GET',
+                    headers: {
+                        ...csrfHeaders()
+                    },
+                    credentials: 'include'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Not authenticated');
+                }
+            } catch (error) {
+                console.error("Auth check failed:", error);
+                window.location.href = 'index.html';
+            }
+        }
+
+        // Check authentication immediately on load
+        verifyLogin();
+
+        logoutBtn?.addEventListener('click', async () => {
+            try {
+                await fetch(`${baseURL}/auth/logout`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...csrfHeaders()
+                    },
+                    body: JSON.stringify({}), // Empty body now that token is in cookie
+                    credentials: 'include'
+                });
+            } catch (error) {
+                console.error("Logout error:", error);
+            } finally {
+                // Always redirect to login page after attempted logout
+                window.location.href = 'index.html';
+            }
+        });
+    </script>
+</body>
+</html>

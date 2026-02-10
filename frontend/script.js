@@ -1,6 +1,18 @@
 const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
-const baseURL = 'http://localhost:8080';
+const baseURL = window.location.origin; // Use same origin as the page
+
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return null;
+}
+
+function csrfHeaders() {
+    const token = getCookie('csrf_token');
+    return token ? { 'X-CSRF-Token': token } : {};
+}
 
 // Toggle password visibility
 const togglePassword = document.getElementById('togglePassword');
@@ -61,9 +73,11 @@ if (loginForm) {
             const response = await fetch(`${baseURL}/auth`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    ...csrfHeaders()
                 },
-                body: JSON.stringify(data)
+                body: JSON.stringify(data),
+                credentials: 'include'
             });
             
             
@@ -73,11 +87,9 @@ if (loginForm) {
             if (contentType && contentType.includes('application/json')) {
                 result = await response.json();
                 if (response.ok) {
-                
-                    localStorage.setItem('authToken', result.token);
                     showNotification('Login successful! Redirecting...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'home.html';
+                        window.location.href = 'user_dashboard.html';
                     }, 1000);
                 } else {
                     showNotification(result.message || 'Login failed', 'error');
@@ -85,11 +97,9 @@ if (loginForm) {
             } else {
                 result = await response.text();
                 if (response.ok) {
-                    // Assume the text response is the token itself
-                    localStorage.setItem('authToken', result);
                     showNotification('Login successful! Redirecting...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'home.html';
+                        window.location.href = 'user_dashboard.html';
                     }, 1000);
                 } else {
                     showNotification(result, 'error');
@@ -130,9 +140,11 @@ if (registerForm) {
             const response = await fetch(`${baseURL}/auth/register`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    ...csrfHeaders()
                 },
-                body: JSON.stringify(data)
+                body: JSON.stringify(data),
+                credentials: 'include'
             });
             
             
@@ -168,27 +180,21 @@ if (registerForm) {
 
 
 window.onload = async () => {
-    const token = localStorage.getItem('authToken');
-    if (!token) {
-        return; 
+    const currentPage = window.location.pathname;
+    
+    // Only check auth on login/register pages, not on dashboard
+    if (!currentPage.includes('index.html') && !currentPage.includes('register.html')) {
+        return;
     }
     
     try {
         const response = await fetch(`${baseURL}/dashboard`, {
             method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
+            credentials: 'include'
         });
         if (response.status === 200) {
-            
-            const currentPage = window.location.pathname;
-            if (currentPage.includes('index.html') || currentPage.includes('register.html')) {
-                window.location.href = 'home.html';
-            }
-        } else if (response.status === 401) {
-           
-            localStorage.removeItem('authToken');
+            // Already authenticated, redirect to dashboard
+            window.location.href = 'dashboard.html';
         }
     } catch (error) {
         console.error('Error checking login status:', error);

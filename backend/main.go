@@ -3,12 +3,15 @@ package main
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +28,10 @@ import (
 var db *sql.DB
 var jwtKey []byte
 var refreshKey []byte
+var allowedOrigins = map[string]bool{
+	"http://127.0.0.1:5500": true,
+	"http://localhost:5500": true,
+}
 
 var loginAttempts = struct {
 	sync.Mutex
@@ -40,6 +47,48 @@ const (
 	refreshTokenTTL = 7 * 24 * time.Hour
 )
 
+var secureCookies bool
+
+func initSchema(db *sql.DB) error {
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+            id int NOT NULL AUTO_INCREMENT,
+            name varchar(255) DEFAULT NULL,
+            username varchar(255) NOT NULL UNIQUE,
+            password_hash varchar(300) DEFAULT NULL,
+            created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`,
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id int NOT NULL AUTO_INCREMENT,
+            username varchar(255) NOT NULL,
+            token_hash varchar(64) NOT NULL,
+            expires_at timestamp NOT NULL,
+            created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_username (username),
+            KEY idx_expires_at (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`,
+		`CREATE TABLE IF NOT EXISTS access_tokens (
+            id int NOT NULL AUTO_INCREMENT,
+            jti varchar(64) NOT NULL,
+            username varchar(255) NOT NULL,
+            expires_at timestamp NOT NULL,
+            created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_jti (jti),
+            KEY idx_username (username),
+            KEY idx_expires_at (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`,
+	}
+	for _, query := range queries {
+		if _, err := db.Exec(query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func generateJTI() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -53,92 +102,169 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func isStrongPassword(pw string) bool {
-	if len(pw) < 8 {
-		return false
-	}
-	hasLetter := false
-	hasDigit := false
-	for _, c := range pw {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-			hasLetter = true
-		}
-		if c >= '0' && c <= '9' {
-			hasDigit = true
-		}
-	}
-	return hasLetter && hasDigit
+func generateCSRFToken() (string, error) {
+	return generateJTI()
 }
 
-func isBlocked(username string) bool {
+func isStrongPassword(pw string) bool {
+	if len(pw) < 12 {
+		return false
+	}
+	hasLower := false
+	hasUpper := false
+	hasDigit := false
+	hasSpecial := false
+	for _, c := range pw {
+		switch {
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		case strings.ContainsRune("!@#$%^&*()-_=+[]{}|;:,.<>?/", c):
+			hasSpecial = true
+		}
+	}
+	return hasLower && hasUpper && hasDigit && hasSpecial
+}
+
+func rateLimitKey(username string, r *http.Request) string {
+	ip := r.RemoteAddr
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		ip = strings.Split(forwarded, ",")[0]
+	}
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	return fmt.Sprintf("%s|%s", username, ip)
+}
+
+func isBlocked(key string) bool {
 	loginAttempts.Lock()
 	defer loginAttempts.Unlock()
-	until, ok := loginAttempts.blockedUntil[username]
+	until, ok := loginAttempts.blockedUntil[key]
 	if !ok {
 		return false
 	}
 	if time.Now().Before(until) {
 		return true
 	}
-	delete(loginAttempts.blockedUntil, username)
-	loginAttempts.counts[username] = 0
+	delete(loginAttempts.blockedUntil, key)
+	loginAttempts.counts[key] = 0
 	return false
 }
 
-func recordFailure(username string) {
+func recordFailure(key string) {
 	loginAttempts.Lock()
 	defer loginAttempts.Unlock()
-	loginAttempts.counts[username]++
-	if loginAttempts.counts[username] >= 5 {
-		loginAttempts.blockedUntil[username] = time.Now().Add(10 * time.Minute)
-		loginAttempts.counts[username] = 0
+	loginAttempts.counts[key]++
+	if loginAttempts.counts[key] >= 5 {
+		loginAttempts.blockedUntil[key] = time.Now().Add(10 * time.Minute)
+		loginAttempts.counts[key] = 0
 	}
 }
 
-func resetAttempts(username string) {
+func resetAttempts(key string) {
 	loginAttempts.Lock()
 	defer loginAttempts.Unlock()
-	loginAttempts.counts[username] = 0
-	delete(loginAttempts.blockedUntil, username)
+	loginAttempts.counts[key] = 0
+	delete(loginAttempts.blockedUntil, key)
 }
 
 func setAuthCookies(w http.ResponseWriter, accessToken, refreshToken string) {
-	http.SetCookie(w, &http.Cookie{
+	accessCookie := &http.Cookie{
 		Name:     "access_token",
 		Value:    accessToken,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secureCookies,
 		MaxAge:   int(accessTokenTTL.Seconds()),
-	})
-	http.SetCookie(w, &http.Cookie{
+	}
+	refreshCookie := &http.Cookie{
 		Name:     "refresh_token",
 		Value:    refreshToken,
 		Path:     "/auth",
 		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secureCookies,
 		MaxAge:   int(refreshTokenTTL.Seconds()),
-	})
+	}
+	if secureCookies {
+		accessCookie.SameSite = http.SameSiteStrictMode
+		refreshCookie.SameSite = http.SameSiteStrictMode
+	}
+	http.SetCookie(w, accessCookie)
+	http.SetCookie(w, refreshCookie)
+}
+
+func setCSRFCookie(w http.ResponseWriter, token string) {
+	csrfCookie := &http.Cookie{
+		Name:     "csrf_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   secureCookies,
+		MaxAge:   int(refreshTokenTTL.Seconds()),
+	}
+	if secureCookies {
+		csrfCookie.SameSite = http.SameSiteStrictMode
+	}
+	http.SetCookie(w, csrfCookie)
 }
 
 func clearAuthCookies(w http.ResponseWriter) {
 	expired := time.Unix(0, 0)
 	http.SetCookie(w, &http.Cookie{Name: "access_token", Value: "", Path: "/", Expires: expired, MaxAge: -1})
 	http.SetCookie(w, &http.Cookie{Name: "refresh_token", Value: "", Path: "/auth", Expires: expired, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "csrf_token", Value: "", Path: "/", Expires: expired, MaxAge: -1})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:5500")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, PATCH")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Allow unauthenticated creation endpoints without CSRF (login/register)
+		if r.URL.Path == "/auth" || r.URL.Path == "/auth/register" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		cookie, err := r.Cookie("csrf_token")
+		if err != nil || cookie.Value == "" {
+			http.Error(w, "CSRF token missing", http.StatusForbidden)
+			return
+		}
+		headToken := r.Header.Get("X-CSRF-Token")
+		if headToken == "" {
+			http.Error(w, "CSRF token missing", http.StatusForbidden)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(headToken), []byte(cookie.Value)) != 1 {
+			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
+			return
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -226,12 +352,14 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		if authHeader != "" {
 			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
 			if tokenString == authHeader {
+				fmt.Println("AuthMiddleware: Invalid authorization format")
 				http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
 				return
 			}
 		} else {
 			cookie, err := r.Cookie("access_token")
 			if err != nil || cookie.Value == "" {
+				fmt.Println("AuthMiddleware: Authorization cookie missing or empty")
 				http.Error(w, "Authorization required", http.StatusUnauthorized)
 				return
 			}
@@ -240,6 +368,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		claims, err := verifyAccessToken(tokenString)
 		if err != nil {
+			fmt.Printf("AuthMiddleware: Token verification failed: %v\n", err)
 			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
 			return
 		}
@@ -247,10 +376,12 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		var expiresAt time.Time
 		err = db.QueryRow("SELECT expires_at FROM access_tokens WHERE jti = ?", claims.ID).Scan(&expiresAt)
 		if err != nil {
+			// Token might be revoked or DB error
 			http.Error(w, "Invalid or revoked token", http.StatusUnauthorized)
 			return
 		}
 		if time.Now().After(expiresAt) {
+			fmt.Printf("AuthMiddleware: Token expired in DB. Now: %v, ExpiresAt: %v\n", time.Now(), expiresAt)
 			db.Exec("DELETE FROM access_tokens WHERE jti = ?", claims.ID)
 			http.Error(w, "Token expired", http.StatusUnauthorized)
 			return
@@ -276,7 +407,8 @@ func login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
-	if isBlocked(creds.Username) {
+	key := rateLimitKey(creds.Username, r)
+	if isBlocked(key) {
 		http.Error(w, "Too many failed attempts. Try again later.", http.StatusTooManyRequests)
 		return
 	}
@@ -293,16 +425,16 @@ func login(w http.ResponseWriter, r *http.Request) {
 	err = db.QueryRow(query, creds.Username).Scan(&storedHashedPassword)
 	if err != nil {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
-		recordFailure(creds.Username)
+		recordFailure(key)
 		return
 	}
 	if !CheckPassword(storedHashedPassword, creds.Password) {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
-		recordFailure(creds.Username)
+		recordFailure(key)
 		return
 	}
 
-	resetAttempts(creds.Username)
+	resetAttempts(key)
 
 	accessToken, accessJTI, err := generateAccessToken(creds.Username)
 	if err != nil {
@@ -330,8 +462,14 @@ func login(w http.ResponseWriter, r *http.Request) {
 		accessJTI, creds.Username, time.Now().Add(accessTokenTTL))
 	if err != nil {
 		fmt.Printf("Error storing access token JTI: %v\n", err)
+		http.Error(w, "Login failed: Database error storing token", http.StatusInternalServerError)
+		return
 	}
 
+	csrfToken, err := generateCSRFToken()
+	if err == nil {
+		setCSRFCookie(w, csrfToken)
+	}
 	setAuthCookies(w, accessToken, refreshToken)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -395,21 +533,21 @@ func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req RefreshRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil || cookie.Value == "" {
+		http.Error(w, "Refresh token required", http.StatusUnauthorized)
 		return
 	}
+	refreshTokenString := cookie.Value
 
 	// Verify refresh token
-	claims, err := verifyRefreshToken(req.RefreshToken)
+	claims, err := verifyRefreshToken(refreshTokenString)
 	if err != nil {
 		http.Error(w, "Invalid or expired refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	refreshHash := hashToken(req.RefreshToken)
+	refreshHash := hashToken(refreshTokenString)
 
 	// Check if refresh token exists in database
 	var storedToken string
@@ -461,12 +599,16 @@ func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Error storing new access token JTI: %v\n", err)
 	}
 
+	csrfToken, err := generateCSRFToken()
+	if err == nil {
+		setCSRFCookie(w, csrfToken)
+	}
 	setAuthCookies(w, newAccessToken, newRefreshToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"access_token":  newAccessToken,
-		"refresh_token": newRefreshToken,
+		"refresh_token": newRefreshToken, // Still returning it, though client won't strictly need it if strictly cookie-based
 		"token_type":    "Bearer",
 		"expires_in":    fmt.Sprint(int(accessTokenTTL.Seconds())),
 	})
@@ -478,20 +620,26 @@ func logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req RefreshRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
+	cookie, err := r.Cookie("refresh_token")
 	if err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		// If no cookie, just clear any that might exist and return success (idempotent-ish)
+		clearAuthCookies(w)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"success": "Logged out successfully",
+		})
 		return
 	}
+	refreshTokenString := cookie.Value
 
-	claims, err := verifyRefreshToken(req.RefreshToken)
+	claims, err := verifyRefreshToken(refreshTokenString)
 	if err != nil {
+		clearAuthCookies(w)
 		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	refreshHash := hashToken(req.RefreshToken)
+	refreshHash := hashToken(refreshTokenString)
 
 	// Delete refresh token from database
 	_, err = db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", refreshHash)
@@ -519,6 +667,10 @@ func main() {
 	if err != nil {
 		fmt.Println("Warning: .env file not found, using system environment variables")
 	}
+	secureCookies = strings.ToLower(os.Getenv("COOKIE_SECURE")) == "true"
+	if secureCookies {
+		fmt.Println("COOKIE_SECURE=true: cookies require HTTPS and SameSite=Strict")
+	}
 
 	// Set JWT keys from environment variables
 	jwtSecret := os.Getenv("JWT_SECRET_KEY")
@@ -542,6 +694,15 @@ func main() {
 		fmt.Println("Warning: Using default database connection string")
 	}
 
+	// Ensure parseTime=true is set so that MySQL DATE/DATETIME columns scan into time.Time correctly
+	if !strings.Contains(dbConnectionString, "parseTime=true") {
+		separator := "?"
+		if strings.Contains(dbConnectionString, "?") {
+			separator = "&"
+		}
+		dbConnectionString += separator + "parseTime=true"
+	}
+
 	db, err = sql.Open("mysql", dbConnectionString)
 	if err != nil {
 		fmt.Println("Database connection error: ", err)
@@ -549,19 +710,44 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := initSchema(db); err != nil {
+		fmt.Printf("Error initializing database schema: %v\n", err)
+		return
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
-	r.Use(corsMiddleware)
-	r.Route("/auth", func(r chi.Router) {
-		r.Post("/", login)
-		r.Post("/register", registration)
-		r.Post("/refresh", refreshTokenHandler)
-		r.Post("/logout", logout)
+
+	// Serve static assets (no CSRF for static files)
+	workDir, _ := os.Getwd()
+	assetDir := http.Dir(filepath.Join(workDir, "../asset"))
+	r.Get("/asset/*", func(w http.ResponseWriter, r *http.Request) {
+		http.StripPrefix("/asset/", http.FileServer(assetDir)).ServeHTTP(w, r)
 	})
 
-	r.With(AuthMiddleware).Get("/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Dashboard"))
+	// API routes with CSRF protection
+	r.Group(func(r chi.Router) {
+		r.Use(csrfMiddleware)
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/", login)
+			r.Post("/register", registration)
+			r.Post("/refresh", refreshTokenHandler)
+			r.Post("/logout", logout)
+		})
+		r.With(AuthMiddleware).Get("/dashboard", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Dashboard"))
+		})
+	})
+
+	// Serve frontend HTML files (no CSRF for static content)
+	frontendDir := http.Dir(filepath.Join(workDir, "../frontend"))
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Disable caching for development so browser always gets fresh HTML/JS
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		http.FileServer(frontendDir).ServeHTTP(w, r)
 	})
 
 	fmt.Println("Server start on 8080 port")
